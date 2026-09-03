@@ -36,10 +36,11 @@ express the requested pipeline set:
 - ZIP packaging and output CRS semantics are not defined precisely enough for
   independently implemented gateway and converter components.
 
-There is no separate `naraga-contract` repository. The team must therefore
-agree which existing copy is authoritative before synchronization. This RFC
-recommends treating `naraga-gateway/contract/openapi.yaml` as the source of truth
-because the gateway owns external request validation and job orchestration.
+The authoritative OpenAPI source is the `dtugm/naraga-contract` repository.
+Contract changes must be proposed and merged there, then delivered
+to this repository through the established synchronization process. The
+vendored OpenAPI file and generated models in `naraga-converter` must not be
+edited manually.
 
 ## Goals and non-goals
 
@@ -50,6 +51,7 @@ because the gateway owns external request validation and job orchestration.
   lifecycle.
 - Expose the currently supported ConvertWin quality and tuning controls.
 - Keep source and output packaging unambiguous.
+- Prevent repeated user actions from running or billing the same conversion twice.
 - Allow the gateway and UI to derive valid conversion choices from
   `/v1/internal/converter/capabilities`.
 - Port the algorithms without changing geometry, metadata, LOD, materials,
@@ -62,6 +64,7 @@ because the gateway owns external request validation and job orchestration.
 - Changing pricing beyond the existing size-based estimate.
 - Changing public job lifecycle endpoints or callback delivery semantics.
 - Treating ZIP as a new logical dataset format.
+- Caching signed download URLs or making private output objects publicly cacheable.
 
 ## Proposed conversion registry
 
@@ -299,21 +302,85 @@ to 2.0 and is not uploaded:
 
 ## Packaging rules
 
-ZIP is transport packaging, not a `DatasetFormat` value:
+ZIP is optional transport packaging, not a `DatasetFormat` value. A direct
+upload of the actual file is preferred whenever the logical dataset consists of
+one file:
 
-- A ZIP containing Shapefile sidecars is reported as `dataset_format: shp`.
-- A ZIP containing one CityJSON document is reported as
-  `dataset_format: cityjson`.
-- A ZIP containing one CityGML document is reported as `dataset_format: gml`.
-- A ZIP containing one LAS/LAZ file is reported as `las`/`laz`.
+- GeoJSON, GPKG, CityJSON, CityGML, LAS, and LAZ are normally uploaded directly.
+- Shapefile requires ZIP because `.shp`, `.shx`, `.dbf`, and optionally `.prj`
+  form one logical dataset. It is reported as `dataset_format: shp`.
+- An already archived CityJSON, CityGML, LAS, or LAZ asset may be accepted for
+  compatibility and retains its logical format, but clients must not create a
+  ZIP merely to upload a single file.
 - PMTiles, MBTiles, and standalone CityGML outputs are uploaded as raw files.
 - A 3D Tiles directory is uploaded as `<source-stem>_3dtiles.zip` and reported as
   `dataset_format: 3dtiles`.
 
-For input, `ResolvedDataset.name` carries the `.zip` suffix. For output, the
-gateway must issue a `storage_key` ending in `.zip` for `3dtiles`; no new schema
-property is required. Archive extraction must reject absolute paths, `..` path
-segments, and symlink entries.
+For an archived input, `ResolvedDataset.name` carries the `.zip` suffix. The
+converter streams extraction into job scratch space and deletes the extracted
+copy when the job terminates. This temporary space requirement is why direct
+single-file upload is the default. For output, the gateway must issue a
+`storage_key` ending in `.zip` for `3dtiles`; no new schema property is required.
+Archive extraction must reject absolute paths, `..` path segments, and symlink
+entries.
+
+## Duplicate submission and result reuse
+
+The existing protections solve only part of the duplicate-work problem:
+
+- `Idempotency-Key` prevents the gateway from charging or creating another job
+  when the same client action is retried with the same key.
+- The converter's `job_id` uniqueness prevents the gateway from dispatching the
+  same accepted job twice.
+- Neither protection catches a second job with a new idempotency key but
+  identical input and parameters.
+
+Caching must be gateway-owned. The gateway knows the owner, job, credit ledger,
+and output dataset records; the converter deliberately does not. A converter
+cache would be unable to authorize cross-job reuse safely and would still need
+the gateway to remap storage keys and billing.
+
+### Proposed behavior
+
+1. The frontend creates one `Idempotency-Key` per user action, reuses it for all
+   retries, disables the Convert button while the request is pending, and
+   navigates to the returned job immediately.
+2. Before debiting credits or dispatching work, the gateway calculates an
+   owner-scoped execution fingerprint from:
+   - `owner_id`;
+   - service and model;
+   - ordered input dataset IDs;
+   - canonical JSON parameters with contract defaults applied; and
+   - converter implementation version from service capabilities.
+3. A matching queued/processing job causes the new request to return
+   `409 CONFLICT` before creating, debiting, or dispatching another job. Error details
+   contain `reason: IDENTICAL_JOB_EXISTS`, `existing_job_id`, and
+   `existing_status`; the UI navigates to that job.
+4. A matching completed job is reusable only when every output dataset is still
+   `ready`, not soft-deleted, and its storage object still exists. The gateway
+   returns the same `409 CONFLICT` details pointing to the completed job, whose
+   existing output dataset IDs remain downloadable. It does not invoke the
+   converter or debit credits.
+5. Failed and cancelled jobs never populate the result cache. Missing/deleted
+   outputs and a changed implementation version are cache misses.
+6. A gateway transaction or unique active-fingerprint constraint prevents two
+   concurrent requests from both missing the lookup and dispatching duplicate
+   work.
+
+For the initial release, dataset IDs are the input identity. Deduplicating a
+separately re-uploaded byte-identical file is deferred until the upload pipeline
+provides a trusted content SHA-256; S3 multipart ETags are not reliable content
+hashes. Cache reuse never crosses owners.
+
+The existing `ErrorResponse.details` object and `409` responses are sufficient;
+no new response envelope is required. A true retry of one client action keeps
+using its original `Idempotency-Key` and replays the original success response,
+whereas a semantically identical new action receives the conflict above.
+
+Repeated `GET /datasets/{dataset_id}/download` calls do not start conversion and
+must continue issuing fresh short-lived signed redirects with
+`Cache-Control: no-store`. The stored conversion artifact is reused; the
+credential-bearing redirect response is not cached.
 
 ## CRS and spatial metadata
 
@@ -383,8 +450,8 @@ maximum upload size, and timeout defaults before rollout.
 
 ## Compatibility and rollout
 
-1. Approve this RFC and assign an authoritative OpenAPI copy.
-2. Update that OpenAPI file and increment `x-contract-version`.
+1. Approve this RFC.
+2. Update `dtugm/naraga-contract` and increment `x-contract-version`.
 3. Regenerate Python and TypeScript contract artifacts.
 4. Synchronize the same OpenAPI revision and generated artifacts to converter,
    gateway, frontend, and any service whose CI checks the shared contract.
@@ -404,6 +471,10 @@ the converter image. Existing datasets and completed jobs remain valid.
 - The generated contract accepts all five request shapes and rejects unknown
   parameters.
 - Gateway, converter, and frontend use the same contract version.
+- Repeated identical submissions reuse the active/completed job, consume no
+  additional credits, and dispatch no additional converter process.
+- Cache entries are owner-scoped and invalidated by parameter, input dataset,
+  implementation-version, or output-availability changes.
 - Capabilities expose exactly the implemented source/target pairs.
 - Swagger UI renders typed fields and valid examples for all five pipelines.
 - Cancellation stops child processes and sends no later callback.
@@ -421,7 +492,8 @@ the converter image. Existing datasets and completed jobs remain valid.
 - [ ] Approve parameter names, bounds, defaults, and irrelevant-parameter rejection.
 - [ ] Approve conversion matrix and capabilities behavior.
 - [ ] Approve ZIP and CRS semantics.
-- [ ] Confirm which OpenAPI copy is authoritative.
+- [ ] Approve gateway-owned execution fingerprints and cache-hit billing behavior.
+- [ ] Confirm `dtugm/naraga-contract` synchronization and versioning workflow.
 
 ### DevOps
 
@@ -435,4 +507,3 @@ the converter image. Existing datasets and completed jobs remain valid.
 - [ ] Confirm the UI derives available conversions from capabilities.
 - [ ] Confirm advanced parameters can be rendered from the approved schema.
 - [ ] Confirm `.zip`, `.gml`, `.pmtiles`, and `.mbtiles` download behavior.
-
