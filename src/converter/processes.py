@@ -73,13 +73,14 @@ async def run_process(
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
     )
-    assert process.stdout is not None and process.stderr is not None
+    stdout, stderr = process.stdout, process.stderr
+    assert stdout is not None and stderr is not None
     lines: list[str] = []
     tail = bytearray()
 
     async def _communicate() -> None:
         await asyncio.gather(
-            _read_lines(process.stdout, lines, on_line), _read_tail(process.stderr, tail)
+            _read_lines(stdout, lines, on_line), _read_tail(stderr, tail)
         )
         await process.wait()
 
