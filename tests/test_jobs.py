@@ -6,12 +6,15 @@ full callback path (auth header, sequencing, timestamps) is exercised for real.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
+from copy import deepcopy
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from converter.jobs import PREFIX
@@ -19,6 +22,34 @@ from converter.main import app
 
 AUTH = {"Authorization": "Bearer test-token"}  # set by tests/conftest.py
 RFC3339_MS_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+
+@pytest.fixture(autouse=True)
+def _stub_pipeline_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_execute(
+        request: Any, client: Any, report_progress: Any
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        del client
+        for pct in (25, 50, 75):
+            await asyncio.sleep(0.05)
+            await report_progress(pct)
+        upload = request.output_upload_urls[0]
+        return (
+            [
+                {
+                    "name": "example-output",
+                    "dataset_format": upload.output_format,
+                    "dataset_role": None,
+                    "storage_key": upload.storage_key,
+                    "size_bytes": 0,
+                    "crs": "EPSG:4326",
+                    "bbox": None,
+                }
+            ],
+            {"output_format": upload.output_format, "output_size_bytes": 0},
+        )
+
+    monkeypatch.setattr("converter.jobs.execute_conversion", fake_execute)
 
 SAMPLE_REQUEST: dict[str, Any] = {
     "job_id": "00000000-0000-4000-8000-000000000001",
@@ -54,7 +85,9 @@ SAMPLE_REQUEST: dict[str, Any] = {
 
 
 def _sample(job_id: str) -> dict[str, Any]:
-    return {**SAMPLE_REQUEST, "job_id": job_id}
+    payload = deepcopy(SAMPLE_REQUEST)
+    payload["job_id"] = job_id
+    return payload
 
 
 def _install_gateway_sink(events: list[dict[str, Any]]) -> None:
@@ -193,6 +226,40 @@ def test_capabilities() -> None:
             "gltf",
         ]
         assert body["max_input_size_bytes"] > 0
+        assert body["conversion_matrix"] == {
+            "geojson": ["pmtiles", "mbtiles"],
+            "gpkg": ["pmtiles", "mbtiles"],
+            "shp": ["pmtiles", "mbtiles"],
+            "las": ["3dtiles"],
+            "laz": ["3dtiles"],
+            "cityjson": ["gml", "3dtiles"],
+            "gml": ["3dtiles"],
+        }
+
+
+def test_submit_rejects_unsupported_conversion_before_accepting() -> None:
+    payload = _sample("00000000-0000-4000-8000-000000000006")
+    payload["params"] = {"target_format": "pmtiles"}
+    payload["output_upload_urls"] = [
+        {
+            **payload["output_upload_urls"][0],
+            "output_format": "pmtiles",
+            "storage_key": f"{payload['output_prefix']}out.pmtiles",
+        }
+    ]
+    with TestClient(app) as client:
+        r = client.post(f"{PREFIX}/jobs", json=payload, headers=AUTH)
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "UNSUPPORTED_CONVERSION"
+
+
+def test_submit_rejects_output_that_does_not_match_target() -> None:
+    payload = _sample("00000000-0000-4000-8000-000000000007")
+    payload["output_upload_urls"][0]["output_format"] = "pmtiles"
+    with TestClient(app) as client:
+        r = client.post(f"{PREFIX}/jobs", json=payload, headers=AUTH)
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_restart_recovers_orphans_and_keeps_idempotency() -> None:

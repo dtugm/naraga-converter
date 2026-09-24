@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # How often the drainer retries unacknowledged terminal callbacks.
     outbox_drain_interval_seconds: float = 30.0
 
+    # Per-job scratch directories are created below this root and always removed.
+    converter_staging_root: str = "/tmp/naraga-converter"
+
 
 @lru_cache
 def get_settings() -> Settings:

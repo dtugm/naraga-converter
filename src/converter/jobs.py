@@ -36,6 +36,8 @@ from .contract.models import (
     InternalJobStatus,
     ServiceCapabilities,
 )
+from .pipeline_registry import UnsupportedConversion, conversion_matrix, validate_pipeline_request
+from .runtime import execute_conversion
 from .store import StateStore
 
 log = logging.getLogger(__name__)
@@ -111,38 +113,23 @@ def _estimate_credits(input_datasets: Any) -> tuple[int, int]:
 
 
 async def run_job(
-    request: Any, report_progress: Callable[[int], Awaitable[None]]
+    request: Any,
+    client: Any,
+    report_progress: Callable[[int], Awaitable[None]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, int]:
-    """REPLACE THIS with the real Converter pipeline.
-
-    Returns (output dataset drafts, result_summary or None, credits_used).
-    A real implementation streams inputs from request.input_datasets[...].signed_url,
-    writes each output with an HTTP PUT to request.output_upload_urls[n].url (always
-    under request.output_prefix), returns this service's result model as a dict, and
-    MUST call report_progress at least every request.heartbeat_interval_seconds.
-
-    CRITICAL: PyTorch/GDAL/PDAL code is synchronous. Run it via
-    `await asyncio.to_thread(...)` (or a process pool) — blocking the event loop
-    freezes /health and the orchestrator kills the container mid-job.
-    """
-    for pct in (25, 50, 75):
-        await asyncio.sleep(0.05)  # simulated work; also gives cancellation a window
-        await report_progress(pct)
-    upload = request.output_upload_urls[0]
-    draft: dict[str, Any] = {
-        "name": "example-output",
-        "dataset_format": upload.output_format,
-        "dataset_role": None,
-        "storage_key": upload.storage_key,  # MUST be under request.output_prefix
-        "size_bytes": 0,
-        "crs": "EPSG:4326",
-        "bbox": None,
-    }
+    """Run the selected converter pipeline and return its callback payload."""
+    drafts, result = await execute_conversion(request, client, report_progress)
     credits_used, _ = _estimate_credits(request.input_datasets)
-    return [draft], None, credits_used
+    return drafts, result, credits_used
 
 
-async def _execute(job_id: str, request: Any, sender: CallbackSender, store: StateStore) -> None:
+async def _execute(
+    job_id: str,
+    request: Any,
+    sender: CallbackSender,
+    store: StateStore,
+    client: Any,
+) -> None:
     """Run one job and report every outcome the contract defines."""
 
     async def report_progress(pct: int) -> None:
@@ -155,7 +142,7 @@ async def _execute(job_id: str, request: Any, sender: CallbackSender, store: Sta
     try:
         async with asyncio.timeout(float(request.max_job_duration_seconds)):
             await sender.send("processing", 0)
-            drafts, result_summary, credits_used = await run_job(request, report_progress)
+            drafts, result_summary, credits_used = await run_job(request, client, report_progress)
         store.set_status(job_id, "complete", 100)
         await sender.send(
             "complete",
@@ -207,6 +194,40 @@ async def submit_job(
     except ValidationError as exc:
         return _error(422, "VALIDATION_ERROR", str(exc))
 
+    if job_request.service.value != "converter" or job_request.model is not None:
+        return _error(
+            422,
+            "VALIDATION_ERROR",
+            "converter jobs require service=converter and model=null",
+        )
+    if set(job_request.input_datasets) != {"input"}:
+        return _error(
+            422,
+            "VALIDATION_ERROR",
+            "exactly one input dataset named 'input' is required",
+        )
+    if len(job_request.output_upload_urls) != 1:
+        return _error(422, "VALIDATION_ERROR", "exactly one output upload URL is required")
+
+    input_dataset = job_request.input_datasets["input"]
+    target = job_request.params.target_format.value
+    output = job_request.output_upload_urls[0]
+    if output.output_format.value != target:
+        return _error(422, "VALIDATION_ERROR", "output format must match params.target_format")
+    if not output.storage_key.startswith(job_request.output_prefix):
+        return _error(422, "VALIDATION_ERROR", "output storage_key must be under output_prefix")
+    if target == "3dtiles" and not output.storage_key.lower().endswith(".zip"):
+        return _error(422, "VALIDATION_ERROR", "3dtiles output storage_key must end in .zip")
+
+    explicit_params = set(payload.get("params", {}))
+    params = job_request.params.model_dump(mode="json", include=explicit_params)
+    try:
+        validate_pipeline_request(input_dataset.dataset_format.value, target, params)
+    except UnsupportedConversion as exc:
+        return _error(422, "UNSUPPORTED_CONVERSION", str(exc))
+    except ValueError as exc:
+        return _error(422, "VALIDATION_ERROR", str(exc))
+
     store: StateStore = request.app.state.store
     job_id = str(job_request.job_id)
     if not store.insert_job(job_id, str(job_request.callback_url)):
@@ -219,7 +240,9 @@ async def submit_job(
         client=request.app.state.http,
         store=store,
     )
-    _tasks[job_id] = asyncio.create_task(_execute(job_id, job_request, sender, store))
+    _tasks[job_id] = asyncio.create_task(
+        _execute(job_id, job_request, sender, store, request.app.state.http)
+    )
 
     credits_estimated, _ = _estimate_credits(job_request.input_datasets)
     accepted: dict[str, Any] = InternalJobAccepted.model_validate(
@@ -303,6 +326,7 @@ async def capabilities(authorization: Annotated[str | None, Header()] = None) ->
             "models": MODELS,
             "output_formats": OUTPUT_FORMATS,
             "max_input_size_bytes": MAX_INPUT_SIZE_BYTES,
+            "conversion_matrix": conversion_matrix(),
         }
     ).model_dump(mode="json", exclude_none=True)
     return JSONResponse(caps)
