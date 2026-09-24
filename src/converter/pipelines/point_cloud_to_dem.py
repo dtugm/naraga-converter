@@ -10,12 +10,16 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import rasterio
 from pyproj import CRS, Transformer
 from rasterio.shutil import copy as raster_copy
 from scipy import ndimage
+
+from converter.config import get_settings
+from converter.pipeline_worker import ConversionInputError, report_progress
 
 PIPELINE_NAME = "pipeline point cloud to DEM"
 NODATA = -9999.0
@@ -35,8 +39,7 @@ class PointCloudToDemConfig:
 
 @dataclass(frozen=True)
 class PointCloudToDemResult:
-    dtm_path: Path
-    bhm_path: Path
+    dem_path: Path
     crs: str
     bbox_wgs84: tuple[float, float, float, float]
     resolution_m: float
@@ -55,7 +58,7 @@ class RasterGrid:
 ProgressCallback = Callable[[int], None]
 
 
-class PointCloudToDemError(RuntimeError):
+class PointCloudToDemError(ConversionInputError):
     """Raised when an input cannot produce a trustworthy DTM and BHM."""
 
 
@@ -162,11 +165,31 @@ def calculate_bhm(roof: np.ndarray, dtm: np.ndarray, building_mask: np.ndarray) 
     return bhm
 
 
+def calculate_dsm(
+    dtm_flattened: np.ndarray, bhm: np.ndarray, building_mask: np.ndarray
+) -> np.ndarray:
+    """Calculate digital surface model (terrain + buildings)."""
+    dsm = np.asarray(dtm_flattened, dtype=np.float32).copy()
+    bhm_vals = np.asarray(bhm, dtype=np.float32)
+    mask = np.asarray(building_mask, dtype=bool)
+    
+    dtm_valid = _valid_elevation(dsm)
+    bhm_valid = _valid_elevation(bhm_vals)
+    
+    valid_inside = mask & dtm_valid & bhm_valid
+    dsm[valid_inside] = dsm[valid_inside] + bhm_vals[valid_inside]
+    
+    invalid_inside = mask & ~(dtm_valid & bhm_valid)
+    dsm[invalid_inside] = NODATA
+    
+    return dsm
+
+
 def _inspect_point_cloud(input_path: Path) -> PointCloudMetadata:
     try:
         import laspy
     except ImportError as exc:  # pragma: no cover - exercised by the production image
-        raise PointCloudToDemError("laspy is required to inspect LAS/LAZ input") from exc
+        raise RuntimeError("laspy is required to inspect LAS/LAZ input") from exc
 
     try:
         with laspy.open(input_path) as source:
@@ -282,39 +305,47 @@ def _building_pipeline(
 def _run_pdal_pipeline(pipeline: dict[str, object]) -> None:
     try:
         completed = subprocess.run(
-            ["pdal", "pipeline", "--stdin"],
+            [get_settings().pdal_bin, "pipeline", "--stdin"],
             input=json.dumps(pipeline),
             text=True,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             check=False,
         )
     except FileNotFoundError as exc:
-        raise PointCloudToDemError("PDAL executable is not available") from exc
+        raise RuntimeError("PDAL executable is not available") from exc
     if completed.returncode != 0:
-        raise PointCloudToDemError(
-            f"PDAL rasterization failed with exit code {completed.returncode}"
+        err_msg = completed.stderr[-2000:] if completed.stderr else ""
+        raise RuntimeError(
+            f"PDAL rasterization failed with exit code {completed.returncode}: {err_msg}"
         )
 
 
-def _write_cog(array: np.ndarray, profile: dict[str, object], target: Path) -> None:
+def _write_cog(
+    bands: list[tuple[np.ndarray, str]], profile: dict[str, object], target: Path
+) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="cog-", dir=target.parent) as temp_dir:
         temp_root = Path(temp_dir)
         source_path = temp_root / "source.tif"
         staged_path = temp_root / "output.tif"
+        
+        first_array = bands[0][0]
         output_profile = {
             "driver": "GTiff",
-            "width": array.shape[1],
-            "height": array.shape[0],
-            "count": 1,
+            "width": first_array.shape[1],
+            "height": first_array.shape[0],
+            "count": len(bands),
             "dtype": "float32",
             "crs": profile["crs"],
             "transform": profile["transform"],
             "nodata": NODATA,
         }
         with rasterio.open(source_path, "w", **output_profile) as dataset:
-            dataset.write(array.astype(np.float32), 1)
+            for i, (array, desc) in enumerate(bands, start=1):
+                dataset.write(array.astype(np.float32), i)
+                dataset.set_band_description(i, desc)
+                
         raster_copy(
             source_path,
             staged_path,
@@ -335,9 +366,9 @@ def _ensure_same_grid(dtm: rasterio.io.DatasetReader, building: rasterio.io.Data
         or dtm.transform != building.transform
         or dtm.crs != building.crs
     ):
-        raise PointCloudToDemError("PDAL produced mismatched terrain and building grids")
+        raise RuntimeError("PDAL produced mismatched terrain and building grids")
     if building.count < 2:
-        raise PointCloudToDemError("PDAL building raster is missing max/count bands")
+        raise RuntimeError("PDAL building raster is missing max/count bands")
 
 
 def generate_point_cloud_to_dem(
@@ -397,7 +428,7 @@ def generate_point_cloud_to_dem(
         except PointCloudToDemError:
             raise
         except Exception as exc:
-            raise PointCloudToDemError("unable to read PDAL raster output") from exc
+            raise RuntimeError("unable to read PDAL raster output") from exc
 
         mask, labels, component_count = build_building_mask(occupancy)
         flattened, unresolved = flatten_building_sites(
@@ -409,12 +440,16 @@ def generate_point_cloud_to_dem(
         )
         filled_roof = fill_roof_surface(roof, labels, component_count)
         bhm = calculate_bhm(filled_roof, flattened, mask)
+        dsm = calculate_dsm(flattened, bhm, mask)
         report(75)
 
-        dtm_path = destination / f"{source.stem}_dtm.tif"
-        bhm_path = destination / f"{source.stem}_bhm.tif"
-        _write_cog(flattened, profile, dtm_path)
-        _write_cog(bhm, profile, bhm_path)
+        dem_path = destination / f"{source.stem}_dem.tif"
+        bands = [
+            (flattened, "DTM"),
+            (dsm, "DSM (terrain + buildings, no vegetation)"),
+            (bhm, "BHM (building height above ground)"),
+        ]
+        _write_cog(bands, profile, dem_path)
         report(90)
 
     transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
@@ -422,11 +457,34 @@ def generate_point_cloud_to_dem(
     bbox_wgs84 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
     report(100)
     return PointCloudToDemResult(
-        dtm_path=dtm_path,
-        bhm_path=bhm_path,
+        dem_path=dem_path,
         crs=crs.to_string(),
         bbox_wgs84=bbox_wgs84,
         resolution_m=config.resolution_m,
         building_components_total=component_count,
         building_components_unresolved=unresolved,
     )
+
+
+def run(spec: dict[str, Any]) -> dict[str, Any]:
+    input_paths = spec.get("input_paths", [])
+    if not input_paths:
+        raise ConversionInputError("No input paths provided")
+    
+    input_path = Path(input_paths[0])
+    output_dir = Path(spec["output_dir"])
+    config = PointCloudToDemConfig()
+    
+    result = generate_point_cloud_to_dem(
+        input_path=input_path,
+        output_dir=output_dir,
+        config=config,
+        progress=report_progress,
+    )
+    
+    return {
+        "artifact": str(result.dem_path.absolute()),
+        "name": f"{input_path.stem}_dem.tif",
+        "bbox": list(result.bbox_wgs84),
+        "crs": result.crs,
+    }

@@ -65,8 +65,7 @@ def test_generate_writes_aligned_cogs_and_building_only_bhm(
         progress.append,
     )
 
-    assert result.dtm_path.name == "classified_dtm.tif"
-    assert result.bhm_path.name == "classified_bhm.tif"
+    assert result.dem_path.name == "classified_dem.tif"
     assert result.crs == "EPSG:32649"
     assert result.building_components_total == 1
     assert result.building_components_unresolved == 0
@@ -79,15 +78,22 @@ def test_generate_writes_aligned_cogs_and_building_only_bhm(
     assert captured[0]["pipeline"][-1]["window_size"] == 2
     assert captured[1]["pipeline"][1]["expression"] == "Classification == 6"
 
-    with rasterio.open(result.dtm_path) as dtm, rasterio.open(result.bhm_path) as bhm:
-        assert dtm.profile["driver"] == "GTiff"
-        assert dtm.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
-        assert dtm.crs == bhm.crs
-        assert dtm.transform == bhm.transform
-        np.testing.assert_array_equal(dtm.read(1), np.full((5, 5), 10, dtype=np.float32))
+    with rasterio.open(result.dem_path) as dem_ds:
+        assert dem_ds.profile["driver"] == "GTiff"
+        assert dem_ds.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+        assert dem_ds.count == 3
+        assert dem_ds.descriptions[0] == "DTM"
+        assert dem_ds.descriptions[1] == "DSM (terrain + buildings, no vegetation)"
+        assert dem_ds.descriptions[2] == "BHM (building height above ground)"
+        np.testing.assert_array_equal(dem_ds.read(1), np.full((5, 5), 10, dtype=np.float32))
+        
+        expected_dsm = np.full((5, 5), 10, dtype=np.float32)
+        expected_dsm[2, 2] = 18
+        np.testing.assert_array_equal(dem_ds.read(2), expected_dsm)
+
         expected_bhm = np.zeros((5, 5), dtype=np.float32)
         expected_bhm[2, 2] = 8
-        np.testing.assert_array_equal(bhm.read(1), expected_bhm)
+        np.testing.assert_array_equal(dem_ds.read(3), expected_bhm)
 
 
 @pytest.mark.parametrize(

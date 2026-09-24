@@ -71,15 +71,10 @@ def test_real_pdal_pipeline_generates_aligned_cogs(tmp_path: Path, suffix: str) 
         PointCloudToDemConfig(resolution_m=1.0, dtm_search_radius_m=2.0),
     )
 
-    with rasterio.open(result.dtm_path) as dtm, rasterio.open(result.bhm_path) as bhm:
-        assert dtm.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
-        assert bhm.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
-        assert dtm.crs == rasterio.crs.CRS.from_epsg(32649)
-        assert (dtm.width, dtm.height, dtm.transform) == (
-            bhm.width,
-            bhm.height,
-            bhm.transform,
-        )
-        bhm_values = bhm.read(1)
+    with rasterio.open(result.dem_path) as dem_ds:
+        assert dem_ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
+        assert dem_ds.crs == rasterio.crs.CRS.from_epsg(32649)
+        assert dem_ds.count == 3
+        bhm_values = dem_ds.read(3)
         assert np.count_nonzero(bhm_values > 0) > 0
         assert float(bhm_values.max()) == pytest.approx(8.0, abs=0.1)

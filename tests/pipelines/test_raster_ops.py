@@ -140,3 +140,56 @@ def test_bhm_clamps_negative_heights_and_preserves_nodata_inside_building() -> N
 
     assert bhm[0, 0] == 0
     assert bhm[0, 1] == NODATA
+
+def test_calculate_dsm_combines_dtm_and_bhm_inside_building_and_keeps_dtm_outside() -> None:
+    from converter.pipelines.point_cloud_to_dem import calculate_dsm
+
+    dtm = np.array([
+        [10.0, 10.0, 10.0],
+        [10.0, 12.0, 10.0],
+        [10.0, 10.0, NODATA],
+    ], dtype=np.float32)
+    
+    bhm = np.array([
+        [0.0, 0.0, 0.0],
+        [0.0, 8.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ], dtype=np.float32)
+    
+    mask = np.array([
+        [False, False, False],
+        [False, True, False],
+        [False, False, False],
+    ], dtype=bool)
+
+    dsm = calculate_dsm(dtm, bhm, mask)
+
+    assert dsm[0, 0] == 10.0
+    assert dsm[2, 2] == NODATA
+    assert dsm[1, 1] == 20.0
+
+
+def test_calculate_dsm_propagates_nodata_inside_building() -> None:
+    from converter.pipelines.point_cloud_to_dem import calculate_dsm
+
+    dtm = np.array([
+        [NODATA, 10.0],
+        [10.0, 10.0]
+    ], dtype=np.float32)
+    
+    bhm = np.array([
+        [8.0, NODATA],
+        [NODATA, NODATA]
+    ], dtype=np.float32)
+    
+    mask = np.array([
+        [True, True],
+        [True, False]
+    ], dtype=bool)
+
+    dsm = calculate_dsm(dtm, bhm, mask)
+
+    assert dsm[0, 0] == NODATA
+    assert dsm[0, 1] == NODATA
+    assert dsm[1, 0] == NODATA
+    assert dsm[1, 1] == 10.0
