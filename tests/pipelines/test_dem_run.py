@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from converter.pipeline_worker import ConversionInputError
 from converter.pipelines.point_cloud_to_dem import PointCloudToDemResult, run
+from converter.worker_api import ConversionInputError
 
 
 def test_dem_run_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from converter.config import get_settings
-from converter.pipeline_worker import ConversionInputError, report_progress
+from converter.worker_api import ConversionInputError, report_progress
 
 PIPELINE_NAME = "pipeline vector tiles"
 

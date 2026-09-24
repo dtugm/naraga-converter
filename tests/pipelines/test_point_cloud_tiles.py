@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from converter.pipeline_worker import ConversionInputError
 from converter.pipelines import point_cloud_tiles as pct
+from converter.worker_api import ConversionInputError
 
 
 def test_select_input_path_requires_exactly_one_las_or_laz() -> None:
@@ -45,7 +45,10 @@ def test_normalize_crs_rejects_non_numeric() -> None:
         pct.normalize_crs("not-a-crs")
 
 
-def test_run_raises_conversion_input_error_when_crs_missing(tmp_path: Path) -> None:
+def test_run_raises_conversion_input_error_when_crs_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pct, "_read_header_crs", lambda _path: None)  # readable, no CRS
     input_path = tmp_path / "a.las"
     input_path.write_bytes(b"fixture")
     spec: dict[str, Any] = {
@@ -107,6 +110,7 @@ def test_zip_tiles_dir_places_tileset_at_root(tmp_path: Path) -> None:
 def test_run_end_to_end_with_monkeypatched_subprocess(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(pct, "_read_header_crs", lambda _path: None)
     input_path = tmp_path / "a.laz"
     input_path.write_bytes(b"fixture")
     output_dir = tmp_path / "out"
@@ -152,7 +156,7 @@ def test_header_crs_fallback(tmp_path: Path) -> None:
     import laspy
     from pyproj import CRS
 
-    from converter.pipelines.point_cloud_tiles import _header_crs
+    from converter.pipelines.point_cloud_tiles import _read_header_crs
 
     header = laspy.LasHeader(point_format=6, version="1.4")
     header.add_crs(CRS.from_epsg(32749))
@@ -160,5 +164,8 @@ def test_header_crs_fallback(tmp_path: Path) -> None:
     las.x, las.y, las.z = [430000.0], [9140000.0], [100.0]
     path = tmp_path / "p.laz"
     las.write(path)
-    assert _header_crs(path) == "EPSG:32749"
-    assert _header_crs(tmp_path / "missing.laz") is None
+    assert _read_header_crs(path) == "EPSG:32749"
+    broken = tmp_path / "broken.laz"
+    broken.write_text("{}")
+    with pytest.raises(ConversionInputError, match="unable to read"):
+        _read_header_crs(broken)

@@ -12,22 +12,14 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
 from .pipeline_registry import POINT_CLOUD_TILES, POINT_CLOUD_TO_DEM, VECTOR_TILES
+from .worker_api import INPUT_ERROR_EXIT, ConversionInputError, report_progress
 
-INPUT_ERROR_EXIT = 3
-
-
-class ConversionInputError(ValueError):
-    """The user's input cannot be converted (bad/empty file, missing CRS or classes)."""
-
-
-def report_progress(pct: int) -> None:
-    """Progress line the parent parses from stdout; must never contain paths/URLs."""
-    print(json.dumps({"progress": int(pct)}), flush=True)
-
+__all__ = ["INPUT_ERROR_EXIT", "ConversionInputError", "execute", "report_progress"]
 
 def execute(spec: dict[str, Any]) -> dict[str, Any]:
     pipeline = spec["pipeline"]
@@ -52,6 +44,11 @@ def main() -> None:
     except ConversionInputError as exc:
         result_path.write_text(json.dumps({"error": "input", "message": str(exc)}))
         raise SystemExit(INPUT_ERROR_EXIT) from None
+    except Exception as exc:
+        traceback.print_exc()  # full detail stays in the service log (stderr)
+        message = f"{type(exc).__name__}: {exc}"[:500]
+        result_path.write_text(json.dumps({"error": "internal", "message": message}))
+        raise SystemExit(1) from None
     result_path.write_text(json.dumps(result))
 
 

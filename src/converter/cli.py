@@ -17,7 +17,8 @@ from pathlib import Path
 
 from .archives import extract_zip
 from .pipeline_registry import validate_pipeline_request
-from .pipeline_worker import ConversionInputError, execute
+from .pipeline_worker import execute
+from .worker_api import ConversionInputError
 
 _FORMAT_BY_SUFFIX = {".geojson": "geojson", ".json": "geojson", ".zip": "shp",
                      ".las": "las", ".laz": "laz"}

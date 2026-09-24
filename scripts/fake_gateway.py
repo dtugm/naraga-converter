@@ -83,7 +83,12 @@ def main() -> None:
     p.add_argument("--port", type=int, default=8099)
     p.add_argument("--host-url", default=None, help="URL the converter uses to reach us")
     ARGS = p.parse_args()
-    ARGS.output_name = f"{ARGS.input.stem}.{ARGS.to}"
+    if ARGS.crs is None:  # the contract requires a declared CRS, as the real gateway sends
+        if ARGS.format not in {"geojson", "shp"}:
+            p.error("--crs is required for point clouds (e.g. --crs EPSG:32749)")
+        ARGS.crs = "EPSG:4326"
+    ext = {"cog": "tif", "3dtiles": "zip"}.get(ARGS.to, ARGS.to)  # openable locally
+    ARGS.output_name = f"{ARGS.input.stem}.{ext}"
     base = ARGS.host_url or f"http://host.docker.internal:{ARGS.port}"
 
     server = ThreadingHTTPServer(("0.0.0.0", ARGS.port), Handler)

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from converter.config import get_settings
-from converter.pipeline_worker import ConversionInputError, report_progress
+from converter.worker_api import ConversionInputError, report_progress
 
 PIPELINE_NAME = "pipeline point cloud tiles"
 
@@ -83,16 +83,20 @@ def zip_tiles_dir(tiles_dir: Path, zip_path: Path) -> None:
                 archive.write(file_path, file_path.relative_to(tiles_dir))
 
 
-def _header_crs(path: Path) -> str | None:
-    """EPSG code from the LAS/LAZ header, used when the dataset declares none."""
-    try:
-        import laspy
+def _read_header_crs(path: Path) -> str | None:
+    """Validate the LAS/LAZ header and return its EPSG code (None if it declares none).
 
+    Unreadable files are the user's fault: fail here with ConversionInputError instead of
+    letting mago-3d-tiler fail in a way we could only report as an internal error.
+    """
+    import laspy
+
+    try:
         with laspy.open(path) as reader:
             crs = reader.header.parse_crs()
-        epsg = crs.to_epsg() if crs is not None else None
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ConversionInputError("unable to read LAS/LAZ input") from exc
+    epsg = crs.to_epsg() if crs is not None else None
     return f"EPSG:{epsg}" if epsg else None
 
 
@@ -103,7 +107,8 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
     input_paths = spec.get("input_paths") or []
     source = select_input_path(input_paths)
 
-    source_crs = spec.get("source_crs") or _header_crs(source)
+    header_crs = _read_header_crs(source)
+    source_crs = spec.get("source_crs") or header_crs
     if not source_crs:
         raise ConversionInputError("point cloud has no CRS")
     crs_code = normalize_crs(source_crs)

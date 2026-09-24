@@ -19,7 +19,7 @@ from rasterio.shutil import copy as raster_copy
 from scipy import ndimage
 
 from converter.config import get_settings
-from converter.pipeline_worker import ConversionInputError, report_progress
+from converter.worker_api import ConversionInputError, report_progress
 
 PIPELINE_NAME = "pipeline point cloud to DEM"
 NODATA = -9999.0

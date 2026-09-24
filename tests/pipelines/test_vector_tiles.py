@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from converter.pipeline_worker import ConversionInputError
 from converter.pipelines import vector_tiles as vt
+from converter.worker_api import ConversionInputError
 
 
 def test_select_source_path_shp_requires_exactly_one() -> None:

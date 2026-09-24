@@ -37,9 +37,9 @@ from .contract.models import (
     ServiceCapabilities,
 )
 from .pipeline_registry import UnsupportedConversion, conversion_matrix, validate_pipeline_request
-from .pipeline_worker import ConversionInputError
 from .runtime import execute_conversion
 from .store import StateStore
+from .worker_api import ConversionInputError
 
 log = logging.getLogger(__name__)
 

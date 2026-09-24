@@ -18,9 +18,9 @@ from .archives import extract_zip
 from .config import get_settings
 from .contract.models import InternalJobRequest
 from .pipeline_registry import validate_pipeline_request
-from .pipeline_worker import INPUT_ERROR_EXIT, ConversionInputError
 from .processes import ProcessFailed, run_process
 from .transfer import download_file, upload_file
+from .worker_api import INPUT_ERROR_EXIT, ConversionInputError
 
 # Output CRS per target (contract: bbox is always EPSG:4326 regardless).
 # 3D Tiles encode an ECEF root transform, so the dataset honestly records EPSG:4978.
@@ -117,9 +117,12 @@ async def execute_conversion(
                 on_line=progress.on_line,
             )
         except ProcessFailed as exc:
-            if exc.returncode == INPUT_ERROR_EXIT and result_path.is_file():
-                raise ConversionInputError(json.loads(result_path.read_text())["message"]) from None
-            raise
+            if not result_path.is_file():
+                raise  # killed or crashed before reporting: keep the stderr tail
+            message = json.loads(result_path.read_text()).get("message", "conversion failed")
+            if exc.returncode == INPUT_ERROR_EXIT:
+                raise ConversionInputError(message) from None
+            raise RuntimeError(message) from None  # short message, no traceback
         finally:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
