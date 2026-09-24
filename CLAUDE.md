@@ -100,20 +100,39 @@ and launches `drain_outbox_forever`, which retries every
   `reconstruction_3d` → `naraga-3d-reconstruction` both break naive string transforms.
 - Never log `signed_url` values or the internal token; signed URLs are credentials.
 
-## Current state: `run_job()` is a STUB
+## Current state: three real conversions (contract 2.1.0)
 
-It sleeps 3 × 0.05s, emits progress `25/50/75`, and returns **one fabricated output
-draft** with `size_bytes: 0` and `crs: "EPSG:4326"`. It **never reads
-`input_datasets["input"].signed_url`** and **never PUTs to
-`output_upload_urls[0].url`** — i.e. it converts nothing. A green job proves the
-control plane (dispatch, sequencing, credits, dataset minting) and nothing about the
-data plane; `_e2e/roundtrip` exists to cover that gap until the real pipeline lands.
+`run_job()` → `runtime.execute_conversion()`: download the signed input into a per-job
+scratch dir (zip inputs extracted safely by `archives.py`), run
+`python -m converter.pipeline_worker` in **its own process group** (`processes.py`;
+cancel/timeout kill the whole group), upload the single artifact to
+`output_upload_urls[0]`, delete scratch. Signed URLs never reach the worker.
+
+| source → target | module | tools | artifact / CRS recorded |
+|---|---|---|---|
+| geojson, shp(zip) → pmtiles | `pipelines/vector_tiles.py` | ogr2ogr → tippecanoe → pmtiles-convert | `<stem>.pmtiles`, EPSG:4326 |
+| las, laz → 3dtiles | `pipelines/point_cloud_tiles.py` | mago-3d-tiler 1.15.4 (Java 21) | `<stem>_3dtiles.zip`, EPSG:4978 |
+| las, laz → cog | `pipelines/point_cloud_to_dem.py` | PDAL + rasterio | `<stem>_dem.tif`, 3 bands DTM / DSM / BHM, source CRS |
+
+- The matrix lives in `pipeline_registry.PIPELINES` and is published as
+  `conversion_matrix` in `/capabilities`. Only `target_format`/`output_crs` params are
+  accepted until contract 3.0.0 adds tuning params.
+- **Never pass `-ge` to mago 1.15.4** — `-ge Ellipsoid` crashes it.
+- Worker exit code **3** = unusable user input (`ConversionInputError`) → `failed` with
+  `VALIDATION_ERROR` (gateway: no refund). Any other failure → `INTERNAL_ERROR` (refund).
+- Workers print only `{"progress": n}` JSON lines on stdout; runtime maps them to 10–90.
+- The gateway issues keys like `output.3dtiles` (no `.zip`); accept whatever key it sends.
+- `src/converter/cli.py`, `scripts/fake_gateway.py`, `scripts/smoke_conversions.sh` and
+  `tests/fixtures/make_fixtures.py` are dev/test tools, not production endpoints.
 
 ## Config (`config.py` — nothing reads `os.environ` directly)
 
 `INTERNAL_SERVICE_TOKEN` (**no default — crashes at boot by design**),
 `SERVICE_NAME` (`converter`), `LOG_LEVEL` (`INFO`), `STATE_DB_PATH`
-(`data/state.db` — mount a volume), `OUTBOX_DRAIN_INTERVAL_SECONDS` (`30.0`).
+(`data/state.db` — mount a volume), `OUTBOX_DRAIN_INTERVAL_SECONDS` (`30.0`),
+`CONVERTER_STAGING_ROOT` (`/tmp/naraga-converter`), tool paths `JAVA_BIN`,
+`MAGO_TILER_JAR`, `OGR2OGR_BIN`, `TIPPECANOE_BIN`, `PMTILES_BIN`, `PDAL_BIN` (all
+checked by `/ready`).
 
 ## Testing
 
@@ -139,7 +158,8 @@ time and has an **autouse `_fresh_state` fixture** giving every test its own
 - **No models.** `MODELS: list[str] = []` and `Job.model` is **`null`** on the wire
   (CONTRACT-CHANGES A7) — the test `SAMPLE_REQUEST` has `"model": None`. Never invent a
   placeholder model name to make a shape "consistent" with the other four services.
-- Output formats: `3dtiles`, `pmtiles`, `geojson`, `cog`, `las`, `laz`, `gltf`.
+- Advertised `output_formats` mirror `services.yaml` (contract test); the real, narrower
+  set of supported pairs is `conversion_matrix`.
 - Inputs: exactly **`{input}`**, required — a generic key, not a role-specific one.
   (`dataset_role` on the dataset still says what it is, e.g. `point_cloud`.)
 - **`params` is the odd one out: `{target_format, output_crs?}` — `target_format`
@@ -148,6 +168,5 @@ time and has an **autouse `_fresh_state` fixture** giving every test its own
 - The legal `(source_format → target_format)` pairs are **not** in the spec (all 119
   were left unspecified, CONTRACT-CHANGES D11); they are meant to be served at runtime
   from `GET /v1/internal/converter/capabilities` so the UI never offers an impossible
-  conversion. `/capabilities` does **not** publish them yet — it returns only the flat
-  `output_formats` list. Adding the pair matrix is a contract change in
-  `dtugm/naraga-contract`, not a local addition.
+  conversion. `/capabilities` publishes them as `conversion_matrix` (a field that
+  already exists in contract 2.1.0).
