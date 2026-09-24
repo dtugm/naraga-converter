@@ -15,6 +15,13 @@ services:
       # Durable job state: survives container restarts, so the callback outbox
       # and job idempotency behave like production.
       - state:/app/data
+      # Per-job scratch space (CONVERTER_STAGING_ROOT, default /tmp/naraga-converter).
+      # Named volume so scratch survives a container restart mid-job like state does.
+      - staging:/tmp/naraga-converter
+      # Bind mount for local test fixtures: drop sample inputs in ./data-io on the
+      # host and reference them (e.g. as input_paths) from inside the container at
+      # /data. Not used by the app itself — purely a convenience for manual testing.
+      - ./data-io:/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8085/health"]
       interval: 10s
@@ -25,3 +32,4 @@ services:
 
 volumes:
   state:
+  staging:
