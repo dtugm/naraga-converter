@@ -68,12 +68,12 @@ SAMPLE_REQUEST: dict[str, Any] = {
             "signed_url_expires_at": "2026-09-02T00:00:00.000Z",
         }
     },
-    "params": {"target_format": "laz"},
+    "params": {"target_format": "3dtiles"},
     "output_prefix": "jobs/00000000-0000-4000-8000-000000000001/outputs/",
     "output_upload_urls": [
         {
-            "output_format": "laz",
-            "storage_key": "jobs/00000000-0000-4000-8000-000000000001/outputs/out.laz",
+            "output_format": "3dtiles",
+            "storage_key": "jobs/00000000-0000-4000-8000-000000000001/outputs/output.3dtiles",
             "url": "http://storage.local/put/out",
             "expires_at": "2026-09-02T00:00:00.000Z",
         }
@@ -227,13 +227,10 @@ def test_capabilities() -> None:
         ]
         assert body["max_input_size_bytes"] > 0
         assert body["conversion_matrix"] == {
-            "geojson": ["pmtiles", "mbtiles"],
-            "gpkg": ["pmtiles", "mbtiles"],
-            "shp": ["pmtiles", "mbtiles"],
-            "las": ["3dtiles"],
-            "laz": ["3dtiles"],
-            "cityjson": ["gml", "3dtiles"],
-            "gml": ["3dtiles"],
+            "geojson": ["pmtiles"],
+            "shp": ["pmtiles"],
+            "las": ["3dtiles", "cog"],
+            "laz": ["3dtiles", "cog"],
         }
 
 

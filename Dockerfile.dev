@@ -20,7 +20,7 @@ RUN micromamba install -y -n base -c conda-forge \
 # dependencies from pyproject. PYTHONPATH makes the mounted code importable.
 COPY --chown=$MAMBA_USER:$MAMBA_USER pyproject.toml ./
 COPY --chown=$MAMBA_USER:$MAMBA_USER src ./src
-RUN micromamba run -n base python -m pip install --no-cache-dir -e .
+RUN micromamba run -n base python -m pip install --no-cache-dir -e '.[geo]' pytest
 
 # Durable job state (SQLite) lives here; compose mounts a volume over it.
 RUN mkdir -p /app/data

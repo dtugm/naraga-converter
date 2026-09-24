@@ -18,14 +18,36 @@ from .archives import extract_zip
 from .config import get_settings
 from .contract.models import InternalJobRequest
 from .pipeline_registry import validate_pipeline_request
-from .processes import run_process
+from .pipeline_worker import INPUT_ERROR_EXIT, ConversionInputError
+from .processes import ProcessFailed, run_process
 from .transfer import download_file, upload_file
 
+# Output CRS per target (contract: bbox is always EPSG:4326 regardless).
+# 3D Tiles encode an ECEF root transform, so the dataset honestly records EPSG:4978.
+_TARGET_CRS = {"pmtiles": "EPSG:4326", "3dtiles": "EPSG:4978"}
 
-async def _heartbeat(interval: int, report_progress: Callable[[int], Awaitable[None]]) -> None:
-    while True:
-        await asyncio.sleep(interval)
-        await report_progress(10)
+
+class _Progress:
+    """Maps worker progress (0-100) into the 10-90 band between download and upload."""
+
+    def __init__(self, report: Callable[[int], Awaitable[None]]) -> None:
+        self.report = report
+        self.last = 10
+
+    async def on_line(self, line: str) -> None:
+        try:
+            pct = int(json.loads(line)["progress"])
+        except (ValueError, KeyError, TypeError):
+            return  # tool chatter, not a progress line
+        mapped = 10 + max(0, min(pct, 100)) * 80 // 100
+        if mapped > self.last:
+            self.last = mapped
+            await self.report(mapped)
+
+    async def heartbeat(self, interval: int) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            await self.report(self.last)
 
 
 def _inside(path: Path, parent: Path) -> bool:
@@ -79,9 +101,8 @@ async def execute_conversion(
         result_path = workspace / "worker-result.json"
         request_path.write_text(json.dumps(worker_request))
 
-        heartbeat = asyncio.create_task(
-            _heartbeat(request.heartbeat_interval_seconds, report_progress)
-        )
+        progress = _Progress(report_progress)
+        heartbeat = asyncio.create_task(progress.heartbeat(request.heartbeat_interval_seconds))
         try:
             await run_process(
                 [
@@ -93,7 +114,12 @@ async def execute_conversion(
                 ],
                 workspace,
                 float(request.max_job_duration_seconds),
+                on_line=progress.on_line,
             )
+        except ProcessFailed as exc:
+            if exc.returncode == INPUT_ERROR_EXIT and result_path.is_file():
+                raise ConversionInputError(json.loads(result_path.read_text())["message"]) from None
+            raise
         finally:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -108,7 +134,7 @@ async def execute_conversion(
 
         size = artifact.stat().st_size
         output_crs = (
-            "EPSG:4326" if target_format in {"pmtiles", "mbtiles"} else dataset_json["crs"]
+            _TARGET_CRS.get(target_format) or worker_result.get("crs") or dataset_json["crs"]
         )
         draft = {
             "name": worker_result.get("name", artifact.name),

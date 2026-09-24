@@ -65,8 +65,10 @@ def test_runtime_downloads_runs_uploads_and_cleans(
         uploaded.append(await request.aread())
         return httpx.Response(200)
 
-    async def fake_process(command: list[str], cwd: Path, timeout: float) -> ProcessResult:
-        del command, timeout
+    async def fake_process(
+        command: list[str], cwd: Path, timeout: float, on_line: Any = None
+    ) -> ProcessResult:
+        del command, timeout, on_line
         spec = json.loads((cwd / "worker-request.json").read_text())
         worker_specs.append(spec)
         artifact = cwd / "output" / "roads.pmtiles"

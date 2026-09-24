@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +17,9 @@ class ProcessResult:
 
 
 class ProcessFailed(RuntimeError):
-    pass
+    def __init__(self, message: str, returncode: int | None = None) -> None:
+        super().__init__(message)
+        self.returncode = returncode
 
 
 async def _stop_group(process: asyncio.subprocess.Process) -> None:
@@ -37,7 +39,33 @@ async def _stop_group(process: asyncio.subprocess.Process) -> None:
         await process.wait()
 
 
-async def run_process(command: Sequence[str], cwd: Path, timeout: float) -> ProcessResult:
+_STDERR_TAIL_BYTES = 64 * 1024
+
+
+async def _read_lines(
+    stream: asyncio.StreamReader, sink: list[str], on_line: Callable[[str], Awaitable[None]] | None
+) -> None:
+    async for raw in stream:
+        line = raw.decode(errors="replace").rstrip("\n")
+        sink.append(line)
+        if on_line is not None:
+            await on_line(line)
+
+
+async def _read_tail(stream: asyncio.StreamReader, tail: bytearray) -> None:
+    # ponytail: bounded tail only — mago/tippecanoe can log hundreds of MB on big inputs.
+    while chunk := await stream.read(65536):
+        tail.extend(chunk)
+        del tail[:-_STDERR_TAIL_BYTES]
+
+
+async def run_process(
+    command: Sequence[str],
+    cwd: Path,
+    timeout: float,
+    on_line: Callable[[str], Awaitable[None]] | None = None,
+) -> ProcessResult:
+    """Run one command in its own process group; stream stdout lines to ``on_line``."""
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=cwd,
@@ -45,14 +73,27 @@ async def run_process(command: Sequence[str], cwd: Path, timeout: float) -> Proc
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
     )
+    assert process.stdout is not None and process.stderr is not None
+    lines: list[str] = []
+    tail = bytearray()
+
+    async def _communicate() -> None:
+        await asyncio.gather(
+            _read_lines(process.stdout, lines, on_line), _read_tail(process.stderr, tail)
+        )
+        await process.wait()
+
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except (TimeoutError, asyncio.CancelledError):
+        await asyncio.wait_for(_communicate(), timeout=timeout)
+    except BaseException:  # timeout, cancel, or a failing on_line: never orphan the group
         await _stop_group(process)
         raise
 
-    decoded_out = stdout.decode(errors="replace")
-    decoded_err = stderr.decode(errors="replace")
+    decoded_out = "\n".join(lines)
+    decoded_err = tail.decode(errors="replace")
     if process.returncode != 0:
-        raise ProcessFailed(f"process failed with exit {process.returncode}: {decoded_err[-2000:]}")
+        raise ProcessFailed(
+            f"process failed with exit {process.returncode}: {decoded_err[-2000:]}",
+            returncode=process.returncode,
+        )
     return ProcessResult(decoded_out, decoded_err)

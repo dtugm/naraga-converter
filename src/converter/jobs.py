@@ -37,6 +37,7 @@ from .contract.models import (
     ServiceCapabilities,
 )
 from .pipeline_registry import UnsupportedConversion, conversion_matrix, validate_pipeline_request
+from .pipeline_worker import ConversionInputError
 from .runtime import execute_conversion
 from .store import StateStore
 
@@ -165,6 +166,18 @@ async def _execute(
             error_message="exceeded max_job_duration_seconds",
             credits_used=0,
         )
+    except ConversionInputError as exc:
+        # The user's file is unusable: VALIDATION_ERROR is the gateway's no-refund code.
+        job = store.get_job(job_id)
+        progress = job["progress_percent"] if job else 0
+        store.set_status(job_id, "failed", progress)
+        await sender.send(
+            "failed",
+            progress,
+            error_code="VALIDATION_ERROR",
+            error_message=str(exc),
+            credits_used=0,
+        )
     except Exception as exc:
         job = store.get_job(job_id)
         progress = job["progress_percent"] if job else 0
@@ -216,8 +229,6 @@ async def submit_job(
         return _error(422, "VALIDATION_ERROR", "output format must match params.target_format")
     if not output.storage_key.startswith(job_request.output_prefix):
         return _error(422, "VALIDATION_ERROR", "output storage_key must be under output_prefix")
-    if target == "3dtiles" and not output.storage_key.lower().endswith(".zip"):
-        return _error(422, "VALIDATION_ERROR", "3dtiles output storage_key must end in .zip")
 
     explicit_params = set(payload.get("params", {}))
     params = job_request.params.model_dump(mode="json", include=explicit_params)
