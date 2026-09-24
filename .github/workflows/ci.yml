@@ -43,6 +43,14 @@ jobs:
           --volume "$PWD/tests:/app/tests:ro"
           naraga-converter-geo-test
           run -n base python -m pytest -q /app/tests/pipelines/test_pdal_integration.py
+      - name: Smoke-test the three priority conversions
+        run: >-
+          docker run --rm
+          --entrypoint micromamba
+          --volume "$PWD/tests:/app/tests:ro"
+          --volume "$PWD/scripts:/app/scripts:ro"
+          naraga-converter-geo-test
+          run -n base bash /app/scripts/smoke_conversions.sh
 
   contract:
     runs-on: ubuntu-latest
