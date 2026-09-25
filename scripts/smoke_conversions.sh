@@ -2,6 +2,10 @@
 # Run the three priority conversions on synthetic fixtures inside the geo image.
 # Usage (inside the container): bash scripts/smoke_conversions.sh [WORK_DIR]
 set -euo pipefail
+# Settings() refuses to load without a token (crash-at-boot rule for the service). The
+# smoke run never serves or calls back, so a throwaway value is fine here (e.g. in CI's
+# bare `docker run`, which has no .env).
+export INTERNAL_SERVICE_TOKEN="${INTERNAL_SERVICE_TOKEN:-smoke-test-only}"
 work="${1:-/tmp/smoke}"
 fx="$work/fixtures"; out="$work/out"
 python tests/fixtures/make_fixtures.py "$fx"
