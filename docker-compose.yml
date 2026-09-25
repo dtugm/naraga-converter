@@ -15,6 +15,15 @@ services:
       # Durable job state: survives container restarts, so the callback outbox
       # and job idempotency behave like production.
       - state:/app/data
+      # Per-job scratch space (CONVERTER_STAGING_ROOT, default /tmp/naraga-converter).
+      # Named volume so scratch survives a container restart mid-job like state does.
+      - staging:/tmp/naraga-converter
+      # Manual testing only (not used by the app): inputs/outputs for converter.cli
+      # live in ./data-io (= /data), and the smoke script + fixture generator are
+      # mounted so `docker compose run --rm converter bash scripts/smoke_conversions.sh` works.
+      - ./data-io:/data
+      - ./scripts:/app/scripts:ro
+      - ./tests:/app/tests:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8085/health"]
       interval: 10s
@@ -25,3 +34,4 @@ services:
 
 volumes:
   state:
+  staging:

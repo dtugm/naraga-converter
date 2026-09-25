@@ -18,7 +18,7 @@ jobs:
           version: "0.5.11"
           enable-cache: true
 
-      - run: uv sync --frozen
+      - run: uv sync --frozen --all-extras
 
       # No --fix in CI: the job must FAIL on a violation, not rewrite files.
       - name: Lint
@@ -29,6 +29,28 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+  geo-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build geo-enabled development image
+        run: docker build --file Dockerfile.dev --tag naraga-converter-geo-test .
+      - name: Test real PDAL LAS/LAZ conversion
+        run: >-
+          docker run --rm
+          --entrypoint micromamba
+          --volume "$PWD/tests:/app/tests:ro"
+          naraga-converter-geo-test
+          run -n base python -m pytest -q /app/tests/pipelines/test_pdal_integration.py
+      - name: Smoke-test the three priority conversions
+        run: >-
+          docker run --rm
+          --entrypoint micromamba
+          --volume "$PWD/tests:/app/tests:ro"
+          --volume "$PWD/scripts:/app/scripts:ro"
+          naraga-converter-geo-test
+          run -n base bash /app/scripts/smoke_conversions.sh
 
   contract:
     runs-on: ubuntu-latest

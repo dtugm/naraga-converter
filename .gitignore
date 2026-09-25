@@ -40,3 +40,7 @@ outputs/
 .DS_Store
 .idea/
 *.swp
+
+# local test inputs/outputs (scripts/fake_gateway.py, converter.cli)
+data-io/
+out/

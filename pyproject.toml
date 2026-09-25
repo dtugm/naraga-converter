@@ -16,7 +16,10 @@ dependencies = [
 # Heavy geo/ML wheels live here so `uv sync` stays fast for anyone touching only the
 # API layer. Install with: uv sync --extra geo
 geo = [
+    "numpy>=2.0,<3",
+    "scipy>=1.13,<2",
     "rasterio>=1.4",
+    "laspy[lazrs]>=2.5",
     "geopandas>=1.0",
     "trimesh>=4.5",
     "pyproj>=3.7",
@@ -60,7 +63,7 @@ follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 # Geo/ML libs ship no type stubs.
-module = ["osgeo.*", "pdal.*", "laspy.*", "open3d.*", "rasterio.*", "torch.*", "geopandas.*", "shapely.*", "pyproj.*"]
+module = ["osgeo.*", "pdal.*", "laspy.*", "open3d.*", "rasterio.*", "scipy.*", "torch.*", "geopandas.*", "shapely.*", "pyproj.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
