@@ -5,6 +5,7 @@ prints every callback (POST /callback), and submits one job to the converter.
 
     python scripts/fake_gateway.py --input data-io/area.laz --format laz --to 3dtiles \
         --crs EPSG:32749
+    # add --serve-only to send the POST yourself from Postman or Swagger (/docs)
 
 The converter runs in Docker, so by default it reaches this script through
 host.docker.internal (Docker Desktop). Ctrl-C to stop after the terminal callback.
@@ -82,6 +83,11 @@ def main() -> None:
     p.add_argument("--token", default="dev-internal-token")
     p.add_argument("--port", type=int, default=8099)
     p.add_argument("--host-url", default=None, help="URL the converter uses to reach us")
+    p.add_argument(
+        "--serve-only",
+        action="store_true",
+        help="don't submit: print the request body for Postman/Swagger and wait for callbacks",
+    )
     ARGS = p.parse_args()
     if ARGS.crs is None:  # the contract requires a declared CRS, as the real gateway sends
         if ARGS.format not in {"geojson", "shp"}:
@@ -123,6 +129,15 @@ def main() -> None:
         "max_job_duration_seconds": 7200,
         "heartbeat_interval_seconds": 10,
     }
+    if ARGS.serve_only:
+        print(f"POST {ARGS.converter}/v1/internal/converter/jobs")
+        print(f"Authorization: Bearer {ARGS.token}")
+        print("Body (paste into Postman/Swagger; job_id must be new each time):")
+        print(json.dumps(request, indent=2))
+        print("\nWaiting for callbacks... (Ctrl-C to quit)")
+        DONE.wait()
+        server.shutdown()
+        return
     req = urllib.request.Request(
         f"{ARGS.converter}/v1/internal/converter/jobs",
         data=json.dumps(request).encode(),
