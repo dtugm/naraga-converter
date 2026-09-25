@@ -86,7 +86,7 @@ def test_generate_writes_aligned_cogs_and_building_only_bhm(
         assert dem_ds.descriptions[1] == "DSM (terrain + buildings, no vegetation)"
         assert dem_ds.descriptions[2] == "BHM (building height above ground)"
         np.testing.assert_array_equal(dem_ds.read(1), np.full((5, 5), 10, dtype=np.float32))
-        
+
         expected_dsm = np.full((5, 5), 10, dtype=np.float32)
         expected_dsm[2, 2] = 18
         np.testing.assert_array_equal(dem_ds.read(2), expected_dsm)

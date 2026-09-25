@@ -88,9 +88,10 @@ and launches `drain_outbox_forever`, which retries every
   `asyncio.CancelledError` branch in `_execute` deliberately logs and returns.
 - **Write outputs ONLY under `request.output_prefix`** (use the `storage_key` from
   `output_upload_urls[n]`). The gateway will not mint a dataset outside that prefix.
-- **Sync GDAL/PDAL must run via `await asyncio.to_thread(...)`.** A `gdal.Translate` or
-  PDAL pipeline on a multi-GB input will otherwise block the event loop, freeze
-  `/health`, and get the container killed mid-job.
+- **Conversion work runs in the `pipeline_worker` subprocess, never in the event loop.**
+  A GDAL/PDAL/mago run on a multi-GB input would otherwise block the loop, freeze
+  `/health`, and get the container killed mid-job; the process group is also what lets
+  cancel/timeout kill child tools.
 - **Never hand-edit `src/converter/contract/models.py` or `contract/openapi.yaml`** —
   generated/vendored, CI regenerates and diffs byte-for-byte. Change the canonical spec
   in `dtugm/naraga-contract` and let propagation regenerate here. (`docs/` holds a

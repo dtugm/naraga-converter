@@ -18,10 +18,12 @@ services:
       # Per-job scratch space (CONVERTER_STAGING_ROOT, default /tmp/naraga-converter).
       # Named volume so scratch survives a container restart mid-job like state does.
       - staging:/tmp/naraga-converter
-      # Bind mount for local test fixtures: drop sample inputs in ./data-io on the
-      # host and reference them (e.g. as input_paths) from inside the container at
-      # /data. Not used by the app itself — purely a convenience for manual testing.
+      # Manual testing only (not used by the app): inputs/outputs for converter.cli
+      # live in ./data-io (= /data), and the smoke script + fixture generator are
+      # mounted so `docker compose run --rm converter bash scripts/smoke_conversions.sh` works.
       - ./data-io:/data
+      - ./scripts:/app/scripts:ro
+      - ./tests:/app/tests:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8085/health"]
       interval: 10s

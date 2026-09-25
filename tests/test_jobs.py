@@ -308,3 +308,25 @@ def test_terminal_callback_survives_gateway_outage() -> None:
     complete = [e for e in events if e["status"] == "complete"]
     assert len(complete) == 1
     assert outage["remaining"] == 0
+
+
+def test_unusable_input_fails_as_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User-fault input must fail with VALIDATION_ERROR: the gateway's no-refund code."""
+    from converter.worker_api import ConversionInputError
+
+    async def bad_input(request: Any, client: Any, report_progress: Any) -> Any:
+        raise ConversionInputError("unable to read LAS/LAZ input")
+
+    monkeypatch.setattr("converter.jobs.execute_conversion", bad_input)
+    events: list[dict[str, Any]] = []
+    with TestClient(app) as client:
+        _install_gateway_sink(events)
+        job_id = str(SAMPLE_REQUEST["job_id"])
+        assert client.post(f"{PREFIX}/jobs", json=SAMPLE_REQUEST, headers=AUTH).status_code == 202
+        assert _wait_for_status(client, job_id, "failed")["status"] == "failed"
+
+    terminal = events[-1]
+    assert terminal["status"] == "failed"
+    assert terminal["error_code"] == "VALIDATION_ERROR"
+    assert terminal["error_message"] == "unable to read LAS/LAZ input"
+    assert terminal["credits_used"] == 0

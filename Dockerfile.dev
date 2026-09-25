@@ -5,7 +5,7 @@
 FROM mambaorg/micromamba:1.5.10-noble
 
 # Pin the mago-3d-tiler release and its sha256 so the download is reproducible and
-# tamper-evident (same JAR used in Task C's readiness check via MAGO_TILER_JAR).
+# tamper-evident (/ready checks the file at MAGO_TILER_JAR).
 ARG MAGO_TILER_VERSION=1.15.4
 ARG MAGO_TILER_SHA256=e83b961d122762cf03e57795723fb6d79c452a01d3beb1e382d34c7d39733a40
 

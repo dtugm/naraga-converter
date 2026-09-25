@@ -13,7 +13,7 @@ def test_dem_run_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     input_path = tmp_path / "test.laz"
     input_path.write_bytes(b"")
     output_dir = tmp_path / "out"
-    
+
     def fake_generate(*args: Any, **kwargs: Any) -> PointCloudToDemResult:
         stem = kwargs.get('input_path', input_path).stem
         dem_path = kwargs.get("output_dir", output_dir) / f"{stem}_dem.tif"

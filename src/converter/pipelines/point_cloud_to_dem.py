@@ -172,16 +172,16 @@ def calculate_dsm(
     dsm = np.asarray(dtm_flattened, dtype=np.float32).copy()
     bhm_vals = np.asarray(bhm, dtype=np.float32)
     mask = np.asarray(building_mask, dtype=bool)
-    
+
     dtm_valid = _valid_elevation(dsm)
     bhm_valid = _valid_elevation(bhm_vals)
-    
+
     valid_inside = mask & dtm_valid & bhm_valid
     dsm[valid_inside] = dsm[valid_inside] + bhm_vals[valid_inside]
-    
+
     invalid_inside = mask & ~(dtm_valid & bhm_valid)
     dsm[invalid_inside] = NODATA
-    
+
     return dsm
 
 
@@ -329,7 +329,7 @@ def _write_cog(
         temp_root = Path(temp_dir)
         source_path = temp_root / "source.tif"
         staged_path = temp_root / "output.tif"
-        
+
         first_array = bands[0][0]
         output_profile = {
             "driver": "GTiff",
@@ -345,7 +345,7 @@ def _write_cog(
             for i, (array, desc) in enumerate(bands, start=1):
                 dataset.write(array.astype(np.float32), i)
                 dataset.set_band_description(i, desc)
-                
+
         raster_copy(
             source_path,
             staged_path,
@@ -470,18 +470,18 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
     input_paths = spec.get("input_paths", [])
     if not input_paths:
         raise ConversionInputError("No input paths provided")
-    
+
     input_path = Path(input_paths[0])
     output_dir = Path(spec["output_dir"])
     config = PointCloudToDemConfig()
-    
+
     result = generate_point_cloud_to_dem(
         input_path=input_path,
         output_dir=output_dir,
         config=config,
         progress=report_progress,
     )
-    
+
     return {
         "artifact": str(result.dem_path.absolute()),
         "name": f"{input_path.stem}_dem.tif",

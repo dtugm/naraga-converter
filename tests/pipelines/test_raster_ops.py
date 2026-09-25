@@ -149,13 +149,13 @@ def test_calculate_dsm_combines_dtm_and_bhm_inside_building_and_keeps_dtm_outsid
         [10.0, 12.0, 10.0],
         [10.0, 10.0, NODATA],
     ], dtype=np.float32)
-    
+
     bhm = np.array([
         [0.0, 0.0, 0.0],
         [0.0, 8.0, 0.0],
         [0.0, 0.0, 0.0],
     ], dtype=np.float32)
-    
+
     mask = np.array([
         [False, False, False],
         [False, True, False],
@@ -176,12 +176,12 @@ def test_calculate_dsm_propagates_nodata_inside_building() -> None:
         [NODATA, 10.0],
         [10.0, 10.0]
     ], dtype=np.float32)
-    
+
     bhm = np.array([
         [8.0, NODATA],
         [NODATA, NODATA]
     ], dtype=np.float32)
-    
+
     mask = np.array([
         [True, True],
         [True, False]
