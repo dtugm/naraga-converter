@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -53,7 +55,15 @@ async def ready(response: Response) -> dict[str, Any]:
     Add real checks as you add dependencies — model weights loaded, GPU visible,
     storage reachable — and return 503 when any of them fail.
     """
-    checks: dict[str, bool] = {}
+    tool_settings = get_settings()
+    checks: dict[str, bool] = {
+        "java_bin": shutil.which(tool_settings.java_bin) is not None,
+        "ogr2ogr_bin": shutil.which(tool_settings.ogr2ogr_bin) is not None,
+        "tippecanoe_bin": shutil.which(tool_settings.tippecanoe_bin) is not None,
+        "pmtiles_bin": shutil.which(tool_settings.pmtiles_bin) is not None,
+        "pdal_bin": shutil.which(tool_settings.pdal_bin) is not None,
+        "mago_tiler_jar": Path(tool_settings.mago_tiler_jar).is_file(),
+    }
     ok = all(checks.values())
     if not ok:
         response.status_code = 503

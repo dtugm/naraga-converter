@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     # How often the drainer retries unacknowledged terminal callbacks.
     outbox_drain_interval_seconds: float = 30.0
 
+    # Per-job scratch directories are created below this root and always removed.
+    converter_staging_root: str = "/tmp/naraga-converter"
+
+    # External conversion tools (names are resolved on PATH; the JAR is a file path).
+    java_bin: str = "java"
+    mago_tiler_jar: str = "/opt/mago-3d-tiler/mago-3d-tiler.jar"
+    ogr2ogr_bin: str = "ogr2ogr"
+    tippecanoe_bin: str = "tippecanoe"
+    pmtiles_bin: str = "pmtiles-convert"
+    pdal_bin: str = "pdal"
+
 
 @lru_cache
 def get_settings() -> Settings:
